@@ -1,0 +1,99 @@
+# Fastfile for Audiobookscasa iOS app
+
+default_platform(:ios)
+
+platform :ios do
+  desc "Build and upload to TestFlight"
+  lane :beta do
+    # Ensure we're on the right branch
+    ensure_git_status_clean unless ENV['CI']
+    
+    # Setup code signing
+    setup_ci if ENV['CI']
+    
+    # Use match for code signing (if you're using match)
+    # Uncomment and configure if you're using match for certificate management
+    # match(
+    #   type: "appstore",
+    #   app_identifier: "com.audiobookscasa.app",
+    #   readonly: is_ci
+    # )
+    
+    # Use App Store Connect API for authentication
+    app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_API_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_API_ISSUER_ID"],
+      key_content: ENV["APP_STORE_CONNECT_API_KEY_CONTENT"],
+      is_key_content_base64: true,
+      in_house: false
+    )
+    
+    # Build the app
+    build_app(
+      workspace: "App.xcworkspace",
+      scheme: "App",
+      export_method: "app-store",
+      export_options: {
+        provisioningProfiles: {
+          "com.audiobookscasa.app" => "Audiobookscasa App Store"
+        }
+      },
+      output_directory: "./build",
+      output_name: "Audiobookscasa.ipa",
+      clean: true,
+      silent: false,
+      skip_profile_detection: false,
+      export_xcargs: "-allowProvisioningUpdates"
+    )
+    
+    # Upload to TestFlight
+    upload_to_testflight(
+      skip_waiting_for_build_processing: true,
+      apple_id: ENV["APP_APPLE_ID"], # Add your app's Apple ID
+      distribute_external: false,
+      notify_external_testers: false,
+      changelog: "Automated build from upstream sync",
+      groups: ["Internal Testers"] # Adjust to your TestFlight group name
+    )
+    
+    # Clean up
+    clean_build_artifacts
+  end
+  
+  desc "Download certificates and provisioning profiles"
+  lane :certificates do
+    match(
+      type: "appstore",
+      app_identifier: "com.audiobookscasa.app",
+      readonly: true
+    )
+  end
+  
+  desc "Create a new push certificate"
+  lane :push do
+    pem(
+      app_identifier: "com.audiobookscasa.app",
+      save_private_key: true
+    )
+  end
+  
+  desc "Increment build number"
+  lane :bump_build do
+    increment_build_number(
+      build_number: Time.now.to_i.to_s
+    )
+  end
+  
+  desc "Increment version number"
+  lane :bump_version do |options|
+    if options[:type]
+      increment_version_number(
+        bump_type: options[:type] # patch, minor, major
+      )
+    else
+      increment_version_number(
+        version_number: options[:version]
+      )
+    end
+  end
+end

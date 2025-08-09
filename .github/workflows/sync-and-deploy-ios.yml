@@ -1,0 +1,167 @@
+name: Sync Upstream and Deploy to TestFlight
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      force_deploy:
+        description: 'Force deploy even without upstream changes'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  check-and-sync:
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check_changes.outputs.has_changes }}
+      new_version: ${{ steps.version.outputs.version }}
+      new_build: ${{ steps.version.outputs.build }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+      
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/advplyr/audiobookshelf-app.git || true
+          git fetch upstream
+      
+      - name: Check for upstream changes
+        id: check_changes
+        run: |
+          # Get the latest commits from both branches
+          LOCAL_COMMIT=$(git rev-parse HEAD)
+          UPSTREAM_COMMIT=$(git rev-parse upstream/master)
+          
+          echo "Local commit: $LOCAL_COMMIT"
+          echo "Upstream commit: $UPSTREAM_COMMIT"
+          
+          if [ "$LOCAL_COMMIT" != "$UPSTREAM_COMMIT" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Changes detected from upstream"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes from upstream"
+          fi
+      
+      - name: Merge upstream changes
+        if: steps.check_changes.outputs.has_changes == 'true' || github.event.inputs.force_deploy == 'true'
+        run: |
+          # Create a merge commit with upstream changes
+          git merge upstream/master --no-edit --allow-unrelated-histories || {
+            echo "Merge conflict detected. Manual intervention required."
+            exit 1
+          }
+          
+          # Push the changes
+          git push origin master
+      
+      - name: Extract version information
+        id: version
+        if: steps.check_changes.outputs.has_changes == 'true' || github.event.inputs.force_deploy == 'true'
+        run: |
+          # Extract version from package.json
+          VERSION=$(grep '"version"' package.json | head -1 | awk -F'"' '{print $4}')
+          
+          # Generate build number based on timestamp
+          BUILD_NUMBER=$(date +%Y%m%d%H%M)
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION, Build: $BUILD_NUMBER"
+
+  build-and-deploy:
+    needs: check-and-sync
+    if: needs.check-and-sync.outputs.has_changes == 'true' || github.event.inputs.force_deploy == 'true'
+    runs-on: macos-14  # Use latest macOS runner with Apple Silicon
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master  # Make sure we get the latest merged changes
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build web app
+        run: |
+          npm run generate
+          npx cap sync ios
+      
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.0'
+          bundler-cache: true
+      
+      - name: Install Fastlane
+        run: |
+          gem install fastlane
+      
+      - name: Setup certificates and provisioning profiles
+        env:
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+          FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
+          FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+        run: |
+          cd ios/App
+          fastlane match appstore --readonly
+      
+      - name: Update version and build number
+        run: |
+          cd ios/App
+          xcrun agvtool new-marketing-version ${{ needs.check-and-sync.outputs.new_version }}
+          xcrun agvtool new-version -all ${{ needs.check-and-sync.outputs.new_build }}
+      
+      - name: Build and upload to TestFlight
+        env:
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+          FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
+          FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+        run: |
+          cd ios/App
+          fastlane beta
+      
+      - name: Create release tag
+        if: success()
+        run: |
+          git tag -a "v${{ needs.check-and-sync.outputs.new_version }}-build${{ needs.check-and-sync.outputs.new_build }}" \
+            -m "Automated release from upstream sync"
+          git push origin --tags
+      
+      - name: Send notification
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            iOS TestFlight Deployment ${{ job.status }}
+            Version: ${{ needs.check-and-sync.outputs.new_version }}
+            Build: ${{ needs.check-and-sync.outputs.new_build }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true

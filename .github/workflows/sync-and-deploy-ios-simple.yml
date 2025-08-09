@@ -1,0 +1,173 @@
+name: Sync and Deploy iOS (Simplified)
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      force_deploy:
+        description: 'Force deploy even without upstream changes'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  sync-and-build:
+    runs-on: macos-14  # Use latest macOS runner
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+      
+      - name: Check and merge upstream changes
+        id: sync
+        run: |
+          # Add upstream remote
+          git remote add upstream https://github.com/advplyr/audiobookshelf-app.git || true
+          git fetch upstream
+          
+          # Check for changes
+          LOCAL_COMMIT=$(git rev-parse HEAD)
+          UPSTREAM_COMMIT=$(git rev-parse upstream/master)
+          
+          if [ "$LOCAL_COMMIT" != "$UPSTREAM_COMMIT" ] || [ "${{ github.event.inputs.force_deploy }}" == "true" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            # Try to merge
+            git merge upstream/master --no-edit --allow-unrelated-histories || {
+              echo "::error::Merge conflict detected. Manual intervention required."
+              exit 1
+            }
+            
+            # Push changes
+            git push origin master
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes from upstream"
+            exit 0
+          fi
+      
+      - name: Setup Node.js
+        if: steps.sync.outputs.has_changes == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        if: steps.sync.outputs.has_changes == 'true'
+        run: npm ci
+      
+      - name: Build web app
+        if: steps.sync.outputs.has_changes == 'true'
+        run: |
+          npm run generate
+          npx cap sync ios
+      
+      - name: Setup certificates
+        if: steps.sync.outputs.has_changes == 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          
+          # Import certificate and provisioning profile
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+          
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          
+          # Import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          
+          # Apply provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+      
+      - name: Update version and build number
+        if: steps.sync.outputs.has_changes == 'true'
+        id: version
+        run: |
+          cd ios/App
+          
+          # Get version from package.json
+          VERSION=$(grep '"version"' ../../package.json | head -1 | awk -F'"' '{print $4}')
+          BUILD_NUMBER=$(date +%Y%m%d%H%M)
+          
+          # Update Xcode project
+          xcrun agvtool new-marketing-version $VERSION
+          xcrun agvtool new-version -all $BUILD_NUMBER
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+      
+      - name: Build iOS app
+        if: steps.sync.outputs.has_changes == 'true'
+        run: |
+          cd ios/App
+          
+          # Build archive
+          xcodebuild -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
+            -allowProvisioningUpdates \
+            archive
+          
+          # Export IPA
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
+            -exportPath $RUNNER_TEMP/export \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates
+      
+      - name: Upload to TestFlight
+        if: steps.sync.outputs.has_changes == 'true'
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+        run: |
+          # Create API key file
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$APP_STORE_CONNECT_API_KEY_CONTENT" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          
+          # Upload using altool
+          xcrun altool --upload-app \
+            --type ios \
+            --file $RUNNER_TEMP/export/App.ipa \
+            --apiKey $APP_STORE_CONNECT_API_KEY_ID \
+            --apiIssuer $APP_STORE_CONNECT_API_ISSUER_ID
+      
+      - name: Create release tag
+        if: steps.sync.outputs.has_changes == 'true' && success()
+        run: |
+          git tag -a "v${{ steps.version.outputs.version }}-build${{ steps.version.outputs.build }}" \
+            -m "Automated release from upstream sync"
+          git push origin --tags
+      
+      - name: Clean up keychain
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/app-signing.keychain-db" ]; then
+            security delete-keychain $RUNNER_TEMP/app-signing.keychain-db
+          fi
