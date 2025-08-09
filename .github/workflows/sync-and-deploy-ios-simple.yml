@@ -125,22 +125,13 @@ jobs:
         run: |
           cd ios/App
           
-          # Get the provisioning profile UUID
-          PROFILE_UUID=$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep -A1 'UUID' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          echo "Using provisioning profile: $PROFILE_UUID"
-          
-          # Build archive with manual signing override
+          # Build archive with automatic signing for pods
           xcodebuild -workspace App.xcworkspace \
             -scheme App \
             -configuration Release \
             -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
             -destination 'generic/platform=iOS' \
-            DEVELOPMENT_TEAM="4PA2S8A753" \
-            CODE_SIGNING_REQUIRED="YES" \
-            CODE_SIGNING_ALLOWED="YES" \
-            CODE_SIGN_STYLE="Manual" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
+            -allowProvisioningUpdates \
             archive
           
           # Export IPA
