@@ -14,7 +14,7 @@ on:
 
 jobs:
   sync-and-build:
-    runs-on: macos-14  # Use latest macOS runner
+    runs-on: macos-latest  # Use latest macOS runner with latest Xcode
     
     steps:
       - name: Checkout repository
@@ -55,6 +55,19 @@ jobs:
             echo "No changes from upstream"
             exit 0
           fi
+      
+      - name: Select Xcode version
+        if: steps.sync.outputs.has_changes == 'true'
+        run: |
+          # List available Xcode versions
+          ls /Applications/ | grep Xcode || true
+          # Try to select the latest Xcode
+          sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer || 
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || 
+          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer || 
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          # Show selected version
+          xcodebuild -version
       
       - name: Setup Node.js
         if: steps.sync.outputs.has_changes == 'true'

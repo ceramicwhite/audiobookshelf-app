@@ -1,0 +1,65 @@
+name: Test Xcode Version
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-xcode:
+    strategy:
+      matrix:
+        runner: [macos-13, macos-14, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    
+    steps:
+      - name: Check macOS version
+        run: |
+          echo "Runner: ${{ matrix.runner }}"
+          sw_vers
+      
+      - name: List available Xcode versions
+        run: |
+          echo "Available Xcode versions:"
+          ls /Applications/ | grep -i xcode || echo "No Xcode found in /Applications"
+          
+          # Try mdfind to locate Xcode
+          echo ""
+          echo "Searching for Xcode installations:"
+          mdfind "kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'" || true
+      
+      - name: Check current Xcode version
+        run: |
+          echo "Current Xcode version:"
+          xcodebuild -version || echo "xcodebuild not found"
+          
+          echo ""
+          echo "Current Xcode path:"
+          xcode-select -p || echo "No Xcode selected"
+      
+      - name: Try to select Xcode 16
+        run: |
+          echo "Attempting to select Xcode 16..."
+          
+          # Try different possible paths for Xcode 16
+          if [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
+            echo "Selected Xcode 16.0"
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+            echo "Selected Xcode 16.1"
+          elif [ -d "/Applications/Xcode_16.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+            echo "Selected Xcode 16"
+          elif [ -d "/Applications/Xcode.app" ]; then
+            # Check if default Xcode is version 16
+            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+            XCODE_VERSION=$(/usr/bin/xcodebuild -version | head -1 | awk '{print $2}')
+            echo "Selected default Xcode version: $XCODE_VERSION"
+          else
+            echo "Xcode 16 not found on this runner"
+            echo "Available Xcode versions:"
+            ls /Applications/ | grep -i xcode || echo "None found"
+          fi
+          
+          echo ""
+          echo "Final Xcode version:"
+          xcodebuild -version
