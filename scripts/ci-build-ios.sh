@@ -36,8 +36,8 @@ echo "🧹 Cleaning build folders..."
 rm -rf ~/Library/Developer/Xcode/DerivedData
 xcodebuild clean -workspace App.xcworkspace -scheme App -quiet
 
-# Build the archive
-echo "🏗️ Building archive..."
+# Build the archive without signing (to avoid Pod signing issues)
+echo "🏗️ Building archive without signing..."
 xcodebuild archive \
     -workspace App.xcworkspace \
     -scheme App \
@@ -45,10 +45,8 @@ xcodebuild archive \
     -archivePath "$RUNNER_TEMP/Audiobookscasa.xcarchive" \
     -destination 'generic/platform=iOS' \
     -quiet \
-    DEVELOPMENT_TEAM="$TEAM_ID" \
-    CODE_SIGN_IDENTITY="$CERT_NAME" \
-    PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
-    CODE_SIGN_STYLE="Manual" \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_REQUIRED=NO \
     ONLY_ACTIVE_ARCH=NO
 
 # Check if archive was created
@@ -58,6 +56,20 @@ if [ ! -d "$RUNNER_TEMP/Audiobookscasa.xcarchive" ]; then
 fi
 
 echo "✅ Archive created successfully"
+
+# Sign the app in the archive
+echo "🔏 Signing the app..."
+/usr/bin/codesign --force --sign "$CERT_NAME" \
+    --entitlements App/App.entitlements \
+    --timestamp \
+    "$RUNNER_TEMP/Audiobookscasa.xcarchive/Products/Applications/Audiobookshelf.app"
+
+if [ $? -ne 0 ]; then
+    echo "❌ Code signing failed"
+    exit 1
+fi
+
+echo "✅ App signed successfully"
 
 # Create export options dynamically
 echo "📝 Creating export options..."
