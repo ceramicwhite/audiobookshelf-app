@@ -125,16 +125,11 @@ jobs:
         run: |
           cd ios/App
           
-          # Get the provisioning profile UUID and name
-          PROFILE_UUID=$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep -A1 'UUID' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          PROFILE_NAME=$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep -A1 '<key>Name</key>' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          echo "Using provisioning profile: $PROFILE_NAME ($PROFILE_UUID)"
-          
           # Clean build folder
           rm -rf ~/Library/Developer/Xcode/DerivedData
           xcodebuild clean -workspace App.xcworkspace -scheme App
           
-          # Build archive - First build without code signing
+          # Build archive without code signing to avoid Pod issues
           xcodebuild archive \
             -workspace App.xcworkspace \
             -scheme App \
@@ -144,13 +139,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
           
-          # Manually sign the app in the archive
-          codesign --force --sign "Apple Distribution" \
-            --entitlements App/App.entitlements \
-            --timestamp \
-            "$RUNNER_TEMP/Audiobookscasa.xcarchive/Products/Applications/Audiobookshelf.app"
-          
-          # Export IPA with proper signing
+          # Export IPA with signing - this will sign only the app
           xcodebuild -exportArchive \
             -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
             -exportPath $RUNNER_TEMP/export \
