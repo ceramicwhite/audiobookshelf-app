@@ -81,37 +81,44 @@ jobs:
           # Create a temporary Podfile with CI-specific post_install
           cp Podfile Podfile.original
           
-          # Add CI-specific configuration to disable Pod signing
-          cat >> Podfile <<'PODFILE_END'
-
-# CI-specific: Disable signing for all Pod targets
-post_install do |installer|
-  assertDeploymentTarget(installer)
-  
-  installer.pods_project.targets.each do |target|
-    target.build_configurations.each do |config|
-      # Disable signing for Pod targets
-      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-      config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
-      config.build_settings['CODE_SIGN_IDENTITY'] = ''
-      config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''
-      config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] = ''
-    end
-  end
-  
-  # Set signing for main app target
-  installer.generated_projects.each do |project|
-    project.targets.each do |target|
-      if target.name == "Audiobookshelf"
-        target.build_configurations.each do |config|
-          config.build_settings['CODE_SIGN_STYLE'] = 'Manual'
-          config.build_settings['DEVELOPMENT_TEAM'] = '4PA2S8A753'
-        end
-      end
-    end
-  end
-end
-PODFILE_END
+          # Create Ruby script to append to Podfile
+          cat > append_podfile.rb <<'RUBY_SCRIPT'
+          podfile_content = File.read('Podfile')
+          
+          additional_content = '
+          # CI-specific: Disable signing for all Pod targets
+          post_install do |installer|
+            assertDeploymentTarget(installer)
+            
+            installer.pods_project.targets.each do |target|
+              target.build_configurations.each do |config|
+                # Disable signing for Pod targets
+                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
+                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
+                config.build_settings["CODE_SIGN_IDENTITY"] = ""
+                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""
+                config.build_settings["PROVISIONING_PROFILE_SPECIFIER"] = ""
+              end
+            end
+            
+            # Set signing for main app target
+            installer.generated_projects.each do |project|
+              project.targets.each do |target|
+                if target.name == "Audiobookshelf"
+                  target.build_configurations.each do |config|
+                    config.build_settings["CODE_SIGN_STYLE"] = "Manual"
+                    config.build_settings["DEVELOPMENT_TEAM"] = "4PA2S8A753"
+                  end
+                end
+              end
+            end
+          end
+          '
+          
+          File.write('Podfile', podfile_content + additional_content)
+          RUBY_SCRIPT
+          
+          ruby append_podfile.rb
           
           # Re-run pod install with the modified Podfile
           pod install
