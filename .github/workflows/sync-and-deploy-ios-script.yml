@@ -1,4 +1,4 @@
-name: Sync and Deploy iOS (Simplified)
+name: Sync and Deploy iOS (Script)
 
 on:
   schedule:
@@ -97,11 +97,13 @@ jobs:
           
           # Import certificate to keychain
           security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
           
           # Apply provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+          UUID=$(security cms -D -i $PP_PATH | grep -A1 'UUID' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
       
       - name: Update version and build number
         if: steps.sync.outputs.has_changes == 'true'
@@ -123,38 +125,8 @@ jobs:
       - name: Build iOS app
         if: steps.sync.outputs.has_changes == 'true'
         run: |
-          cd ios/App
-          
-          # Get the provisioning profile UUID and name
-          PROFILE_UUID=$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep -A1 'UUID' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          PROFILE_NAME=$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | grep -A1 '<key>Name</key>' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          echo "Using provisioning profile: $PROFILE_NAME ($PROFILE_UUID)"
-          
-          # Create xcconfig file for signing configuration
-          cat > signing.xcconfig <<EOF
-          CODE_SIGN_STYLE = Manual
-          DEVELOPMENT_TEAM = 4PA2S8A753
-          CODE_SIGN_IDENTITY = Apple Distribution
-          PROVISIONING_PROFILE_SPECIFIER = $PROFILE_NAME
-          EOF
-          
-          # Build archive with manual signing
-          xcodebuild archive \
-            -workspace App.xcworkspace \
-            -scheme App \
-            -configuration Release \
-            -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
-            -destination 'generic/platform=iOS' \
-            -xcconfig signing.xcconfig \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            DEVELOPMENT_TEAM="4PA2S8A753"
-          
-          # Export IPA
-          xcodebuild -exportArchive \
-            -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
-            -exportPath $RUNNER_TEMP/export \
-            -exportOptionsPlist ExportOptions.plist
+          # Use our custom build script
+          ./scripts/ci-build-ios.sh
       
       - name: Upload to TestFlight
         if: steps.sync.outputs.has_changes == 'true'

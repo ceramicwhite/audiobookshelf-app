@@ -1,0 +1,156 @@
+name: Build iOS with Modified Podfile
+
+on:
+  workflow_dispatch:  # Manual trigger only for testing
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build web app
+        run: |
+          npm run generate
+          npx cap sync ios
+      
+      - name: Modify Podfile for CI signing
+        run: |
+          cd ios/App
+          
+          # Add post_install hook to disable signing for Pods
+          cat >> Podfile <<'EOF'
+
+# CI/CD specific post_install to handle code signing
+post_install do |installer|
+  assertDeploymentTarget(installer)
+  
+  # Disable code signing for all Pod targets in CI
+  if ENV['CI'] == 'true'
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+        config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+        config.build_settings['CODE_SIGN_IDENTITY'] = ''
+      end
+    end
+  end
+end
+EOF
+          
+          # Re-run pod install
+          pod install
+      
+      - name: Setup certificates
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          
+          # Import certificate and provisioning profile
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+          
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          
+          # Import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          
+          # Apply provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          UUID=$(security cms -D -i $PP_PATH | grep -A1 'UUID' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
+          
+          echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
+          
+          # Get certificate identity
+          CERT_IDENTITY=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Apple Distribution" | head -1 | awk '{print $2}')
+          echo "CERT_IDENTITY=$CERT_IDENTITY" >> $GITHUB_ENV
+      
+      - name: Build iOS app
+        env:
+          CI: true
+        run: |
+          cd ios/App
+          
+          # Clean build folder
+          rm -rf ~/Library/Developer/Xcode/DerivedData
+          xcodebuild clean -workspace App.xcworkspace -scheme App
+          
+          # Build archive with manual signing for App target only
+          xcodebuild archive \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="4PA2S8A753" \
+            PROVISIONING_PROFILE_SPECIFIER="${{ env.PROFILE_UUID }}" \
+            CODE_SIGN_STYLE="Manual" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $RUNNER_TEMP/app-signing.keychain-db"
+          
+          # Export IPA
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>teamID</key>
+              <string>4PA2S8A753</string>
+              <key>uploadBitcode</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+              <key>compileBitcode</key>
+              <false/>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>signingCertificate</key>
+              <string>${{ env.CERT_IDENTITY }}</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>com.audiobookscasa.app</key>
+                  <string>${{ env.PROFILE_UUID }}</string>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+          
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
+            -exportPath $RUNNER_TEMP/export \
+            -exportOptionsPlist ExportOptions.plist
+      
+      - name: Upload IPA artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: ${{ runner.temp }}/export/App.ipa
