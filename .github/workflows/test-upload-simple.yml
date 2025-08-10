@@ -1,0 +1,143 @@
+name: Test Upload Simple
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload-test:
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build web app
+        run: |
+          npm run generate
+          npx cap sync ios
+      
+      - name: Setup certificates
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          
+          # Import certificate and provisioning profile
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+          
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          
+          # Import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          
+          # Apply provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+      
+      - name: Build and Export IPA
+        run: |
+          cd ios/App
+          
+          # Clean
+          xcodebuild clean -workspace App.xcworkspace -scheme App
+          
+          # Archive without signing
+          xcodebuild archive \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/app.xcarchive \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO
+          
+          # Export with signing
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/app.xcarchive \
+            -exportPath $RUNNER_TEMP/export \
+            -exportOptionsPlist ExportOptions.plist
+          
+          # List exported files
+          echo "Exported files:"
+          ls -la $RUNNER_TEMP/export/
+      
+      - name: Upload to App Store Connect
+        env:
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+        run: |
+          # Create private keys directory
+          mkdir -p ~/private_keys
+          
+          # Write the API key to a file (it's already base64 decoded in the secret)
+          echo -n "$API_KEY" | base64 --decode > ~/private_keys/AuthKey_${API_KEY_ID}.p8
+          
+          # Set proper permissions
+          chmod 600 ~/private_keys/AuthKey_${API_KEY_ID}.p8
+          
+          # Find IPA file
+          IPA_FILE=$(find $RUNNER_TEMP/export -name "*.ipa" -type f | head -1)
+          
+          if [ -z "$IPA_FILE" ]; then
+            echo "Error: No IPA file found"
+            exit 1
+          fi
+          
+          echo "Uploading: $IPA_FILE"
+          
+          # Create API JSON config
+          cat > ~/api_config.json <<EOF
+          {
+            "key_id": "$API_KEY_ID",
+            "issuer_id": "$ISSUER_ID",
+            "key": "~/private_keys/AuthKey_${API_KEY_ID}.p8",
+            "in_house": false
+          }
+          EOF
+          
+          # Use xcrun altool to upload
+          xcrun altool --upload-package "$IPA_FILE" \
+            --type ios \
+            --asc-provider 4PA2S8A753 \
+            --team-id 4PA2S8A753 \
+            --bundle-id com.audiobookscasa.app \
+            --bundle-version "1.0" \
+            --bundle-short-version-string "1.0" \
+            --apiKey "$API_KEY_ID" \
+            --apiIssuer "$ISSUER_ID" \
+            2>&1 | tee upload.log || true
+          
+          # Check for common errors
+          if grep -q "Unable to authenticate" upload.log; then
+            echo "Authentication failed. Trying alternate method..."
+            
+            # Try with environment variables
+            export API_PRIVATE_KEYS_DIR=~/private_keys
+            
+            xcrun altool --upload-app \
+              --file "$IPA_FILE" \
+              --type ios \
+              --apiKey "$API_KEY_ID" \
+              --apiIssuer "$ISSUER_ID"
+          fi

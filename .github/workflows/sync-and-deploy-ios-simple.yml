@@ -152,11 +152,7 @@ jobs:
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
         run: |
-          # Create API key file
-          mkdir -p ~/.appstoreconnect/private_keys
-          echo -n "$APP_STORE_CONNECT_API_KEY_CONTENT" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
-          
-          # Find the exported IPA file (it should be named Audiobookshelf.ipa)
+          # Find the exported IPA file
           IPA_PATH=$(find $RUNNER_TEMP/export -name "*.ipa" | head -1)
           
           if [ -z "$IPA_PATH" ]; then
@@ -167,12 +163,37 @@ jobs:
           
           echo "Found IPA at: $IPA_PATH"
           
-          # Upload using altool
+          # Method 1: Try with environment variable for key directory
+          mkdir -p ~/private_keys
+          echo -n "$APP_STORE_CONNECT_API_KEY_CONTENT" | base64 --decode > ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          
+          export API_PRIVATE_KEYS_DIR=~/private_keys
+          
+          echo "Uploading to TestFlight..."
           xcrun altool --upload-app \
-            --type ios \
             --file "$IPA_PATH" \
-            --apiKey $APP_STORE_CONNECT_API_KEY_ID \
-            --apiIssuer $APP_STORE_CONNECT_API_ISSUER_ID
+            --type ios \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID" \
+            --show-progress \
+            || {
+              echo "Upload failed with altool, trying xcrun notarytool..."
+              
+              # Method 2: Fallback to newer notarytool (for Xcode 13+)
+              xcrun notarytool submit "$IPA_PATH" \
+                --key ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8 \
+                --key-id "$APP_STORE_CONNECT_API_KEY_ID" \
+                --issuer "$APP_STORE_CONNECT_API_ISSUER_ID" \
+                --wait \
+                || {
+                  echo "Both upload methods failed. Please check:"
+                  echo "1. API Key permissions in App Store Connect"
+                  echo "2. The app bundle ID matches App Store Connect"
+                  echo "3. The API key hasn't expired"
+                  exit 1
+                }
+            }
       
       - name: Create release tag
         if: steps.sync.outputs.has_changes == 'true' && success()
