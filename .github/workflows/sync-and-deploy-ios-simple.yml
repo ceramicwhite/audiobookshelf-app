@@ -109,9 +109,24 @@ jobs:
         run: |
           cd ios/App
           
-          # Get version from package.json
-          VERSION=$(grep '"version"' ../../package.json | head -1 | awk -F'"' '{print $4}')
+          # Get version from package.json and clean it for App Store
+          RAW_VERSION=$(grep '"version"' ../../package.json | head -1 | awk -F'"' '{print $4}')
+          # Remove any non-numeric suffixes (like -beta, -alpha, etc.)
+          VERSION=$(echo "$RAW_VERSION" | sed 's/-.*$//' | sed 's/[^0-9.]//g')
+          
+          # Ensure version has exactly 3 parts (add .0 if needed)
+          VERSION_PARTS=$(echo "$VERSION" | tr '.' '\n' | wc -l | tr -d ' ')
+          if [ "$VERSION_PARTS" -eq "2" ]; then
+            VERSION="${VERSION}.0"
+          elif [ "$VERSION_PARTS" -eq "1" ]; then
+            VERSION="${VERSION}.0.0"
+          fi
+          
           BUILD_NUMBER=$(date +%Y%m%d%H%M)
+          
+          echo "Original version: $RAW_VERSION"
+          echo "Cleaned version for App Store: $VERSION"
+          echo "Build number: $BUILD_NUMBER"
           
           # Update Xcode project
           xcrun agvtool new-marketing-version $VERSION
