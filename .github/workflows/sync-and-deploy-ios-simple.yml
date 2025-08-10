@@ -56,17 +56,12 @@ jobs:
             exit 0
           fi
       
-      - name: Select Xcode 16
+      - name: Select Xcode 16.1
         if: steps.sync.outputs.has_changes == 'true'
         run: |
-          # List available Xcode versions
-          ls /Applications/ | grep Xcode || true
-          # Try to select Xcode 16
-          sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer || 
-          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || 
-          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer || 
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          # Show selected version
+          # Select Xcode 16.1 (required for iOS 18 SDK)
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          echo "Selected Xcode version:"
           xcodebuild -version
       
       - name: Setup Node.js
