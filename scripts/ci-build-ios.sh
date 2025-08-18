@@ -34,7 +34,12 @@ echo "📜 Certificate: $CERT_NAME"
 # Clean build folder
 echo "🧹 Cleaning build folders..."
 rm -rf ~/Library/Developer/Xcode/DerivedData
-xcodebuild clean -workspace App.xcworkspace -scheme App -destination 'generic/platform=iOS' -quiet
+
+# Use the latest available iOS SDK
+IOS_SDK=$(xcodebuild -showsdks | grep iphoneos | tail -1 | awk '{print $NF}' || echo "iphoneos")
+echo "📱 Using iOS SDK: $IOS_SDK"
+
+xcodebuild clean -workspace App.xcworkspace -scheme App -sdk "$IOS_SDK" -quiet
 
 # Build the archive without signing (to avoid Pod signing issues)
 echo "🏗️ Building archive without signing..."
@@ -43,7 +48,7 @@ xcodebuild archive \
     -scheme App \
     -configuration Release \
     -archivePath "$RUNNER_TEMP/Audiobookscasa.xcarchive" \
-    -destination 'generic/platform=iOS' \
+    -sdk "$IOS_SDK" \
     -quiet \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \

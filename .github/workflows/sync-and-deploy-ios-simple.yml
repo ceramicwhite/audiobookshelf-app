@@ -150,7 +150,20 @@ jobs:
           
           # Clean build folder
           rm -rf ~/Library/Developer/Xcode/DerivedData
-          xcodebuild clean -workspace App.xcworkspace -scheme App -destination 'generic/platform=iOS'
+          
+          # List available SDKs and destinations
+          echo "Available iOS SDKs:"
+          xcodebuild -showsdks | grep iphoneos || echo "No iOS SDKs found"
+          
+          echo "Available destinations:"
+          xcodebuild -workspace App.xcworkspace -scheme App -showdestinations | grep "platform:iOS" | head -3 || echo "No iOS destinations found"
+          
+          # Use the first available iOS SDK
+          IOS_SDK=$(xcodebuild -showsdks | grep iphoneos | tail -1 | awk '{print $NF}' || echo "iphoneos")
+          echo "Using iOS SDK: $IOS_SDK"
+          
+          # Clean with SDK specification
+          xcodebuild clean -workspace App.xcworkspace -scheme App -sdk "$IOS_SDK"
           
           # Build archive without code signing to avoid Pod issues
           xcodebuild archive \
@@ -158,7 +171,7 @@ jobs:
             -scheme App \
             -configuration Release \
             -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
-            -destination 'generic/platform=iOS' \
+            -sdk "$IOS_SDK" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
           

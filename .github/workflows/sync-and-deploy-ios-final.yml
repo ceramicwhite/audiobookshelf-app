@@ -196,7 +196,12 @@ jobs:
           
           # Clean build folder
           rm -rf ~/Library/Developer/Xcode/DerivedData
-          xcodebuild clean -workspace App.xcworkspace -scheme App -destination 'generic/platform=iOS'
+          
+          # Use the latest available iOS SDK
+          IOS_SDK=$(xcodebuild -showsdks | grep iphoneos | tail -1 | awk '{print $NF}' || echo "iphoneos")
+          echo "Using iOS SDK: $IOS_SDK"
+          
+          xcodebuild clean -workspace App.xcworkspace -scheme App -sdk "$IOS_SDK"
           
           # Build archive with manual signing for App target only
           xcodebuild archive \
@@ -204,7 +209,7 @@ jobs:
             -scheme App \
             -configuration Release \
             -archivePath $RUNNER_TEMP/Audiobookscasa.xcarchive \
-            -destination 'generic/platform=iOS' \
+            -sdk "$IOS_SDK" \
             CODE_SIGN_IDENTITY="$CERT_NAME" \
             DEVELOPMENT_TEAM="4PA2S8A753" \
             PROVISIONING_PROFILE_SPECIFIER="${{ env.PROFILE_UUID }}" \
