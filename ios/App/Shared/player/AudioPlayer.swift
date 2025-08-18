@@ -374,22 +374,22 @@ class AudioPlayer: NSObject {
         logger.log("fadeOut: Fading out playback")
         
         // Define fade parameters.
-        let fadeDuration: Float = 60.0  // total fade duration in seconds
+        let fadeDuration: Float = 20.0  // total fade duration in seconds
         let interval: Float = 1.0      // timer interval in seconds
 
-        // Get the current volume.
+        // Get the current volume as the starting point
         let initialVolume = self.audioPlayer.volume
         let targetVolume: Float = 0.0
         
-        // If the current volume is already at or below zero, just pause.
-        if initialVolume <= targetVolume {
+        // If the current volume is already at zero, just pause.
+        if initialVolume <= 0 {
             self.pause()
             return
         }
         
         // Calculate the volume change per timer tick.
-        // (targetVolume - initialVolume) is negative since target < initial.
-        let step = (targetVolume - initialVolume) * interval / fadeDuration
+        // We want to go from current volume to 0
+        let step = -initialVolume * interval / fadeDuration
         
         // Schedule a timer on the main queue to adjust the volume.
         DispatchQueue.runOnMainQueue { [weak self] in

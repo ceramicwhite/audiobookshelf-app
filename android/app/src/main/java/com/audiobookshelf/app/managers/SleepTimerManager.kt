@@ -28,6 +28,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
   private var isAutoSleepTimer: Boolean = false // When timer was auto-set
   private var autoTimerDisabled: Boolean = false // Disable until out of auto timer period
   private var sleepTimerSessionId: String = ""
+  private var fadeStartVolume: Float = 1f // Store the volume when fade starts
 
   /**
    * Gets the current time from the player notification service.
@@ -104,7 +105,8 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     sleepTimerRunning = true
     sleepTimerFinishedAt = 0L
     sleepTimerElapsed = 0L
-    setVolume(1f)
+    fadeStartVolume = playerNotificationService.currentPlayer.volume
+    setVolume(fadeStartVolume)
 
     if (time == 0L) {
       // Get the current chapter time and set the sleep timer to the end of the chapter
@@ -174,21 +176,21 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
                     )
                     clearSleepTimer()
                     sleepTimerFinishedAt = System.currentTimeMillis()
-                  } else if (sleepTimeSecondsRemaining <= 60 &&
+                  } else if (sleepTimeSecondsRemaining <= 20 &&
                                   DeviceManager.deviceData
                                           .deviceSettings
                                           ?.disableSleepTimerFadeOut != true
                   ) {
-                    // Start fading out audio down to 10% volume
-                    val percentToReduce = 1 - (sleepTimeSecondsRemaining / 60F)
-                    val volume = 1f - (percentToReduce * 0.9f)
+                    // Start fading out audio from current volume to 0%
+                    val fadeProgress = 1 - (sleepTimeSecondsRemaining / 20F)
+                    val volume = fadeStartVolume * (1 - fadeProgress)
                     Log.d(
                             tag,
                             "SLEEP VOLUME FADE $volume | ${sleepTimeSecondsRemaining}s remaining"
                     )
                     setVolume(volume)
                   } else {
-                    setVolume(1f)
+                    setVolume(fadeStartVolume)
                   }
                 }
               }
@@ -223,7 +225,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     sleepTimerRunning = false
     playerNotificationService.unregisterSensor()
 
-    setVolume(1f)
+    setVolume(fadeStartVolume)
   }
 
   /**
@@ -409,7 +411,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
               minOf(sleepTimerEndTime + (time * getPlaybackSpeed()).roundToInt(), getDuration())
     }
 
-    setVolume(1F)
+    setVolume(fadeStartVolume)
     playerNotificationService.clientEventEmitter?.onSleepTimerSet(
             getSleepTimerTimeRemainingSeconds(getPlaybackSpeed()),
             isAutoSleepTimer
@@ -438,7 +440,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
               )
     }
 
-    setVolume(1F)
+    setVolume(fadeStartVolume)
     playerNotificationService.clientEventEmitter?.onSleepTimerSet(
             getSleepTimerTimeRemainingSeconds(getPlaybackSpeed()),
             isAutoSleepTimer

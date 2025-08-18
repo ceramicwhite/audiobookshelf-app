@@ -126,7 +126,7 @@ extension AudioPlayer {
             sleepTimeRemaining -= 1
             self.sleepTimeRemaining = sleepTimeRemaining
           
-            if sleepTimeRemaining == 60 && self.isSleepTimerFadeOutEnabled() {
+            if sleepTimeRemaining == 20 && self.isSleepTimerFadeOutEnabled() {
                 self.startFadeOut()
             }
           
