@@ -150,7 +150,7 @@ jobs:
           
           # Clean build folder
           rm -rf ~/Library/Developer/Xcode/DerivedData
-          xcodebuild clean -workspace App.xcworkspace -scheme App
+          xcodebuild clean -workspace App.xcworkspace -scheme App -destination 'generic/platform=iOS'
           
           # Build archive without code signing to avoid Pod issues
           xcodebuild archive \

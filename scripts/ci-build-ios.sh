@@ -34,7 +34,7 @@ echo "📜 Certificate: $CERT_NAME"
 # Clean build folder
 echo "🧹 Cleaning build folders..."
 rm -rf ~/Library/Developer/Xcode/DerivedData
-xcodebuild clean -workspace App.xcworkspace -scheme App -quiet
+xcodebuild clean -workspace App.xcworkspace -scheme App -destination 'generic/platform=iOS' -quiet
 
 # Build the archive without signing (to avoid Pod signing issues)
 echo "🏗️ Building archive without signing..."
